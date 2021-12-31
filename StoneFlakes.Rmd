@@ -1,0 +1,381 @@
+---
+title: "StoneFlakes"
+author: "Szymon Steczek"
+date: "12/17/2021"
+output:
+  html_document:
+    theme: cosmo
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+library(GGally)
+library(ggcorrplot)
+library(dplyr)
+library(jmv)
+library(MVN)
+```
+
+# Introduction
+
+At the very beginning, let me introduce the data set I have been working with. It is called Stone Flakes and the best introduction is the one that the authors of the data provided:<br>
+
+"The data set concerns the earliest history of mankind. Prehistoric men created the desired shape of a stone tool by striking on a raw stone, thus splitting off flakes, the waste products of the crafting process. Archaelogists do not find many tools, but they do find flakes. The data set is about these flakes. Its rows do not stand for single flakes but for whole inventories of them. The given features are relative frequencies of binary, and mean values of numerical characteristics taken over all pieces found in the inventory. A question related to the data set is: Does the data reflect the technological progress during several hundred thousand years?"
+<br>
+Annotation:
+The columns below stand for the identifier of the inventory, a group
+defined by the archaeologists mainly by age and hominid type (1=Lower
+Paleolithic, Homo ergaster?, oldest; 2=Levallois technique; 3=Middle
+Paleolithic, probably Neanderthals; 4=Homo sapiens, youngest), age of
+the stone artefacts (millennia, not to be taken too seriously), mode of
+dating (geological=more accurate, typological), stone material (1=flint,
+2=other), region (mit=Central Germany, d=Non-Central Germany, eur=Europe
+without Germany), site (1=gravel pit, 0=other), number of finds in
+inventory.
+<br>
+ID group age dating mat region site number
+
+ar 3 -120 geo 2 d 0 34<br>
+arn 2 -200 typo 1 mit 1 5<br>
+be 2 -200 typo 1 mit 1 33<br>
+(...)
+<ul>
+<li>LBI: Length-breadth index of the striking platform</li>
+<li>RTI: Relative-thickness index of the striking platform</li>
+<li>WDI: Width-depth index of the striking platform</li>
+<li>FLA: Flaking angle (the angle between the striking platform and the splitting surface)</li>
+<li>PSF: platform primery (yes/no, relative frequency)</li>
+<li>FSF: Platform facetted (yes/no, relative frequency)</li>
+<li>ZDF1: Dorsal surface totally worked (yes/no, relative frequency)</li>
+<li>PROZD: Proportion of worked dorsal surface (continuous)"</li>
+</ul>
+In the repository there is one file available, but additional variables are provided in the file description for some reason. Based on this description, we bind columns:
+<ul>
+  <li>GR - group by age</li>
+  <li>AGE - estimated age</li>
+  <li>AGER - reliability of age estimation</li>
+  <li>STONE - type of stone</li>
+  <li>REG - region</li>
+  <li>SITE - Gravel pit or other</li>
+  <li>N - number of finds in inventory </li>
+</ul>
+
+Let's upload files and do some basic operations
+```{r}
+StoneFlakes=read.table('StoneFlakes.dat',sep=',',header=TRUE)
+ident=read.table('identifiers.txt')
+StoneFlakes=cbind(StoneFlakes[,2:9],ident[,2:8])
+
+#renaming columns
+colnames(StoneFlakes)=c(colnames(StoneFlakes)[1:8],'GR','AGE','AGER','STONE','REG','SITE','N')
+
+#removing whitespaces from cells
+StoneFlakes=as.data.frame(apply(StoneFlakes,2, function(x) gsub('\\s+', '', x)))
+
+#counting outliers and changing them from '?' to NA
+StoneFlakes[StoneFlakes=='?']=NA
+apply(is.na(StoneFlakes),2,sum)
+```
+Based on variables' descriptions, I change categorical variables, STONE and SITE. Instead of numerical values, I will use respective descriptions' abbreviations. I will also change format of columns.
+
+```{r}
+#changing values in columns STONE and SITE
+head(StoneFlakes)
+StoneFlakes$STONE[StoneFlakes$STONE==1]='flint'
+StoneFlakes$STONE[StoneFlakes$STONE==2]='other'
+StoneFlakes$SITE[StoneFlakes$SITE==1]='gravel'
+StoneFlakes$SITE[StoneFlakes$SITE==0]='other'
+
+#adjusting formats of columns
+StoneFlakes[,c(1:8,10,15)]=sapply(StoneFlakes[,c(1:8,10,15)], as.numeric)
+StoneFlakes$GR=as.factor(StoneFlakes$GR)
+StoneFlakes$AGER=as.factor(StoneFlakes$AGER)
+StoneFlakes$STONE=as.factor(StoneFlakes$STONE)
+StoneFlakes$REG=as.factor(StoneFlakes$REG)
+StoneFlakes$SITE=as.factor(StoneFlakes$SITE)
+```
+
+Let us take a look at the header of the data to get some feeling of it.
+
+```{r}
+head(StoneFlakes)
+```
+
+It is impossible to investigate the data without understanding what it actually means. That's why I investigated the resources online and gained technical knowledge about the subject. I include insightful image and quote from https://stsmith.faculty.anth.ucsb.edu/classes/anth3/courseware/LithicTech/4_Flake_Morphology.html: <br>
+<img src="striking platform.gif" alt="stone flakes image" class="center">
+<br>
+“A flake is any material removed from a core, whether intentional or not. In some cases, the flakes themselves were meant to serve as tools. In other cases, the flake is further modified to make a tool. At other times, the flakes may just be the waste material from shaping, thinning, or resharpening a stone tool. This waste material is called debitage, and is one of the most important collections of lithic material that archeologists study. By studying the waste flakes and failures, we can actually reconstruct the prehistoric production technology and gain valuable insight into an important component of prehistoric human behavior.”<br>
+
+Also, according to Wikipedia “Primary flakes are those whose dorsal surfaces are entirely covered with cortex”. It is important for the variable PSF.<br>
+
+Finally I would like to note that for variables PSF, FSF, ZDF1 descriptions are slightly misleading, as they describe percentage rather than relative frequency.<br>
+
+Now, having the basic understanding of what the data is about, let us investigate what is the structure of the variables. We will make histograms of continuous variables and bar plots of categorical ones. 
+
+```{r,echo=FALSE}
+ggplot(gather(StoneFlakes[,c(1:8,10)]), aes(value)) + 
+  geom_histogram(bins = 10,color='dodgerblue4',fill='dodgerblue4') + 
+  facet_wrap(~key, scales = 'free_x')+theme(legend.position = "none",
+        strip.background = element_rect(colour="white",
+                                        fill='deepskyblue3'))+theme(
+  panel.background = element_rect(fill = "lightblue",
+                                colour = "lightblue",
+                                size = 0.5, linetype = "solid")
+  )
+
+```
+
+As visible, variables follow a variety of different distributions. While some are approximately normal (FLA, RTI), others are heavily skewed (PROZD, LBI). 
+
+```{r,echo=FALSE}
+x=list()
+x[[1]]=ggplot(data=StoneFlakes, aes(x=GR)) +
+  geom_bar(color='dodgerblue4',fill='dodgerblue4') + coord_flip() + ylab('')+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))
+x[[2]]=ggplot(data=StoneFlakes, aes(x=AGER)) +
+  geom_bar(color='dodgerblue4',fill='dodgerblue4') + coord_flip() + ylab('')+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))
+x[[3]]=ggplot(data=StoneFlakes, aes(x=STONE)) +
+  geom_bar(color='dodgerblue4',fill='dodgerblue4') + coord_flip() + ylab('')+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))
+x[[4]]=ggplot(data=StoneFlakes, aes(x=REG)) +
+  geom_bar(color='dodgerblue4',fill='dodgerblue4') + coord_flip() + ylab('')+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))
+x[[5]]=ggplot(data=StoneFlakes, aes(x=SITE)) +
+  geom_bar(color='dodgerblue4',fill='dodgerblue4') + coord_flip() + ylab('')+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))
+
+grid.arrange(x[[1]],x[[2]],x[[3]],x[[4]],x[[5]], ncol=2)
+```
+
+When it comes to categorical variables, for now we observe significant disproportions in between categories' sizes.
+
+Let us count the missing values in the data set. We will choose a non-standard method of dealing with them. Instead of removing, I will substitute means, medians or modes. For FLA and ZDF1 I will use the mean, for AGE LBI PSF FSF I will use the median, since they are skewed and for AGER and SITE I will use the mode.
+
+```{r}
+StoneFlakes$FLA[is.na(StoneFlakes$FLA)]=mean(StoneFlakes$FLA,na.rm=TRUE)
+StoneFlakes$ZDF1[is.na(StoneFlakes$ZDF1)]=mean(StoneFlakes$ZDF1,na.rm=TRUE)
+StoneFlakes$AGE[is.na(StoneFlakes$AGE)]=median(StoneFlakes$AGE,na.rm=TRUE)
+StoneFlakes$LBI[is.na(StoneFlakes$LBI)]=median(StoneFlakes$LBI,na.rm=TRUE)
+StoneFlakes$PSF[is.na(StoneFlakes$PSF)]=median(StoneFlakes$PSF,na.rm=TRUE)
+StoneFlakes$FSF[is.na(StoneFlakes$FSF)]=median(StoneFlakes$FSF,na.rm=TRUE)
+
+getmode=function(v) {
+   uniqv=unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+StoneFlakes$AGER[is.na(StoneFlakes$AGER)]=getmode(StoneFlakes$AGER)
+StoneFlakes$SITE[is.na(StoneFlakes$SITE)]=getmode(StoneFlakes$SITE)
+```
+
+## Results
+### Flint and gravel
+The first thing I am personally curious about, is whether there is a relationship between type of stone (STONE) and SITE where the stones were found. For that purpose, I will create a contingency table and perform Pearson’s Chi-squared Test for categorical data. Because there are big disproportions in sizes of categories, we should try computing p-values using Monte Carlo simulation.
+
+```{r}
+CT=matrix(nrow=2,ncol=2)
+c1=StoneFlakes$STONE
+c2=StoneFlakes$SITE
+CT[1,1]=sum(c1=='flint' & c2=='other')
+CT[1,2]=sum(c1=='flint' & c2=='gravel')
+CT[2,1]=sum(c1=='other' & c2=='other')
+CT[2,2]=sum(c1=='other' & c2=='gravel')
+print(CT)
+chisq.test(CT, simulate.p.value = TRUE)
+```
+
+As visible, we do not detect any significant difference between the sets.
+
+### Age versus group
+I expect that there should be some relationship between groups (oldest,…,newest) [GROUP] and the estimated age of stones [AGE]. Let's start with the box plot. Additionally, color and shape of individual observations will give us information about reliability of time measurement ('geo' - more reliable, 'typo' - less reliable).
+
+```{r}
+StoneFlakes %>%
+  ggplot( aes(x=GR, y=AGE)) +
+    geom_boxplot(fill="dodgerblue2") +
+    geom_jitter(aes(shape=AGER,color=AGER), size=1.5, alpha=0.9) +
+    ggtitle("Age in given groups") +
+    xlab("Group number") +
+    ylab('Age estimator')+theme(plot.title = element_text(hjust = 0.5))+scale_color_manual(values = c('darkblue','deeppink4'))+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))+xlab('')
+```
+
+Both variables are evident to carry almost the same information. Since all outliers have a high reliability (‘geo’), we are going to use Age estimation instead of Group number for the further analysis.
+
+### Correlation of flakes descriptive variables
+Let’s see if and how basic stones' descriptions are related.
+```{r}
+ggcorrplot(cor(StoneFlakes[,1:8]), method = "circle",hc.order = TRUE)
+```
+
+Based on the plot, we can make a few observations:
+<ul>{itemize}
+  <li> ZDF1 (Dorsal surface totally worked) and PROZD (Proportion of worked dorsal surface (continuous)) are strongly positively correlated. This is to be expected, as they measure the same parameter of the surface, just in a slightly different way.</li>
+  <li> PSF is negatively correlated with ZDF1 and PROZD. This confirms my intuition about primary flakes - they cannot have the worked dorsal surface, because they were the first one to be cut from the stone.</li>
+  <li> FSF, WDI, ZDF1 and PROZD are all positively correlated. FSF is one of four types of striking platforms. Apparently this type of a platform is more likely to be on a secondary or tertiary stone flake and a platform is more likely to have higher Width-depth index.<li/>
+</ul>
+
+### Stone types vs flakes’ parameters
+I will try to determine if the stone type changes the parameters of flakes. Box plots should be a good starting point.
+
+```{r,echo=FALSE}
+x=list()
+x[[1]]=ggplot(StoneFlakes,aes(x=STONE,y=LBI))+geom_boxplot(fill='#0008a3')+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))+xlab('')
+x[[2]]=ggplot(StoneFlakes,aes(x=STONE,y=RTI))+geom_boxplot(fill='#0b13b5')+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))+xlab('')
+x[[3]]=ggplot(StoneFlakes,aes(x=STONE,y=WDI))+geom_boxplot(fill='#151dbf')+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))+xlab('')
+x[[4]]=ggplot(StoneFlakes,aes(x=STONE,y=FLA))+geom_boxplot(fill='#2028c9')+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))+xlab('')
+x[[5]]=ggplot(StoneFlakes,aes(x=STONE,y=PSF))+geom_boxplot(fill='#2e36d1')+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))+xlab('')
+x[[6]]=ggplot(StoneFlakes,aes(x=STONE,y=FSF))+geom_boxplot(fill='#3d44d9')+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))+xlab('')
+x[[7]]=ggplot(StoneFlakes,aes(x=STONE,y=ZDF1))+geom_boxplot(fill='#4950e6')+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))+xlab('')
+x[[8]]=ggplot(StoneFlakes,aes(x=STONE,y=PROZD))+geom_boxplot(fill='#535aed')+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))
+grid.arrange(x[[1]],x[[2]],x[[3]],x[[4]],x[[5]],x[[6]],x[[7]],x[[8]], ncol=3)
+```
+
+The biggest visible and possibly significant difference is in RTI (Relative-thickness index of the striking platform) values. However, the sample size is small, so I will perform a bootstrap test to search for a significant difference in means.
+
+```{r}
+meanRTI=mean(StoneFlakes$RTI[StoneFlakes$STONE=='other'])-mean(StoneFlakes$RTI[StoneFlakes$STONE=='flint'])
+x=c()
+for(i in 1:10000){
+  s=sample(StoneFlakes$RTI,11)
+  x[i]=mean(s)-mean(setdiff(StoneFlakes$RTI,s))
+}
+qplot(x, geom="histogram", fill=I('dodgerblue4')) +theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))+xlab('')+ggtitle('Bootstrapping - mean differences')+theme(plot.title = element_text(hjust = 0.5))+geom_segment(lineend = 'butt', aes(xend=meanRTI, yend=0, x = meanRTI, y = 300), arrow = arrow(length = unit(0.03, "npc")),color='navyblue')
+```
+
+The histogram shows 10000 random sets' means. The arrow illustrates the actual mean difference.
+At any reasonable confidence level, we confirm that the relative-thickness index of the striking platform is significantly higher (at least 5 units higher) in the set of non-flint stone flakes.
+
+### Technological progress
+The question we are the most interested in, is whether the data reflects any technological progress of tools making process. We will try to answer this question by comparing the time parameter with flakes descriptions. I doubt if our ancestors cared about parameters such as LBIor WDI and if those measures would be even meaningful for them, but I believe that those parameters might reflect changes they made deliberately, such as subtlety, sharpness and general crafting technique.
+In my opinion, changes in some variables can be interpreted directly, because of their intuitive meaning, while others reflect some hidden variables.
+Let’s start with FLA (flaking angle), because this variable describes a simple, technical aspect of the crafting process, something that our ancestors might have changed deliberately. 
+
+```{r chunk 12,echo=FALSE}
+ggplot(data=StoneFlakes, aes(x=AGE,y=FLA,color=STONE,shape=STONE)) +
+  geom_point()+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))+scale_color_manual(values = c('darkblue','deeppink4')) 
+```
+
+Since ‘other’ stones sample is too small to make some predictions about changes in time within this subset and because they are clearly outliers in this context, we will focus on changes of FLA depending on AGE of flint stone flakes. We will fit a linear regression and test slope's significance. Let us weight the residuals based on the logarithm of the number of stones in the inventory. By this, we want to increase our confidence based on sample size.
+
+```{r}
+regression=summary(lm(FLA~AGE,StoneFlakes[StoneFlakes$STONE=='flint',],weights = log(N)))
+
+ggplot(data=StoneFlakes[StoneFlakes$STONE=='flint',],aes(x=AGE,y=FLA,size=log(N)))+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))+geom_point(col='darkblue')+ geom_abline(slope=regression$coefficients[2,1],intercept = regression$coefficients[1,1],col='blue',size=1)
+
+print(regression)
+```
+
+Based on the regression, we can say that our ancestors deliberately decreased flaking angle as a part of technological improvement process.
+
+Another variable I want to analyze directly in a similar way is PROZD (Proportion of worked dorsal surface). Let us fit a linear regression with weighted residuals again.
+
+```{r,echo=FALSE}
+
+regression=summary(lm(PROZD~AGE,StoneFlakes[StoneFlakes$STONE=='flint',],weights = log(N)))
+ggplot(data=StoneFlakes, aes(x=AGE,y=PROZD))+
+  geom_point(aes(color=STONE, shape=STONE,size=log(N)))+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))+scale_color_manual(values = c('darkblue','deeppink4')) + geom_abline(slope=regression$coefficients[2,1],intercept = regression$coefficients[1,1],col='blue',size=1)
+
+print(regression)
+```
+
+The PROZD variable is quite meaningful for us. Its increase in time might mean that the tools were becoming increasingly more detailed, as more layers of flakes were removed from the core.
+
+The last variable we will analyze in the same way is FSF (Platform facetted (yes/no, relative frequency).
+
+```{r,echo=FALSE}
+regression=summary(lm(FSF~AGE,StoneFlakes[StoneFlakes$STONE=='flint',],weights = log(N)))
+ggplot(data=StoneFlakes, aes(x=AGE,y=FSF))+
+  geom_point(aes(color=STONE, shape=STONE,size=log(N)))+theme(panel.background = element_rect(fill = "lightblue",colour = "lightblue",size = 0.5, linetype = "solid"))+scale_color_manual(values = c('darkblue','deeppink4')) + geom_abline(slope=regression$coefficients[2,1],intercept = regression$coefficients[1,1],col='blue',size=1)
+print(regression)
+```
+
+Assuming that FSF (Platform facetted) is a type of technique used, we conclude that this technique was more becoming increasingly popular.
+
+### Regions comparison
+
+As we know, flakes were collected in three different regions. We will try to compare if the flakes vary across different regions. To do it, we will use MAN(C)OVA. In order to eliminate noise and make our comparison more reliable, we will include AGE as additional variable. Moreover, due to insufficient number of observations, model will be fitted only for flint stones. Once again, we use weighted residuals with weights equal to the logarithm of findings in the inventory.
+
+```{r}
+filStoneFlakes3=StoneFlakes %>% filter(STONE=='flint')
+model1c=manova(cbind(FLA,FSF,LBI,RTI,WDI,PSF,ZDF1)~AGE+REG,data=filStoneFlakes3)
+mvn(model1c$residuals)$multivariateNormality
+mvn(model1c$residuals)$univariateNormality
+```
+
+However, after fitting the model, it turns out that Henze-Zirkler test for multivariate normality, detects violation of assumptions about error normality, as visible. We keep eliminating non-normal variables until the multivariate normality is achieved. This leads us to the model with FLA, WDI and LBI.
+
+```{r}
+model3c=manova(cbind(FLA,WDI,LBI)~AGE+REG,data=filStoneFlakes3,weights=log(N))
+mvn(model3c$residuals)$multivariateNormality
+mvn(model3c$residuals)$univariateNormality
+summary(model3c)
+```
+
+According to the p-values, there is a statistically significant difference between (flint) stone flakes in different regions. However, a bigger sample would be necessary to further investigate this problem.
+
+### Attempt of dimensionality reduction of stone flakes' descriptions 
+
+Let us try two dimensionality reduction techniques to simplify the description of flakes. In the second PCA version, I try to reduce the variance of the variables by subtracting the effect of AGE variable. 
+
+```{r}
+PCAset1=StoneFlakes[,1:8]
+PCAset1=scale(PCAset1)
+pca1=princomp(PCAset1)
+summary(pca1)
+PCAset=matrix(nrow=79,ncol=0)
+for(n in 1:8){
+  i=c('LBI', 'RTI', 'WDI', 'FLA', 'PSF', 'FSF', 'ZDF1', 'PROZD')[n]
+  j=paste0(i,'~','AGE')
+  slope=summary(lm(j,data=StoneFlakes))$coefficients[2,1]
+  PCAset=cbind(PCAset,StoneFlakes[,i]-StoneFlakes$AGE*slope)
+}
+PCAset=scale(PCAset)
+pca=princomp(PCAset)
+summary(pca)
+```
+
+We need at least four components to explain 80% of variance. This is not a significant simplification for us, as interpretation of these principal components remains unclear.
+
+We face the same problem when applying Factor Analysis. Even though we expect some intuitive factors to influence flakes' description (as tools' precision, time of work, tool's size), it is hard to interpret the factors' meaning without a deep understanding of the subject. FA does not provide a significant simplification anyway, as it requires four factors to be statistically significant.
+
+```{r}
+FA=StoneFlakes[,1:8]
+FA=scale(FA)
+factanal(FA,4)
+
+FA=matrix(nrow=79,ncol=0)
+for(n in 1:8){
+  i=c('LBI', 'RTI', 'WDI', 'FLA', 'PSF', 'FSF', 'ZDF1', 'PROZD')[n]
+  j=paste0(i,'~','AGE')
+  slope=summary(lm(j,data=StoneFlakes))$coefficients[2,1]
+  FA=cbind(FA,StoneFlakes[,i]-StoneFlakes$AGE*slope)
+}
+```
+A plot below shows loadings of factors for number of factors equal to two. 
+```{r,echo=FALSE}
+FA=scale(FA)
+fanal1=factanal(FA,2)
+plot(x=NA,ylim=c(-1,1),xlim=c(-1,1),ylab='',xlab='')
+for(i in 1:8){
+  t=c('LBI', 'RTI', 'WDI', 'FLA', 'PSF', 'FSF', 'ZDF1', 'PROZD')[i]
+  text(x=fanal1$loadings[i,1],y=fanal1$loadings[i,2],t)
+}
+arrows(c(0,-1),c(-1,0),c(0,1),c(1,0),0.05)
+
+```
+
+## Conclusions
+
+Technological progress and changes in time are apparent. Probably the best example is the increasing percentage of a dorsal surface totally worked, what can mean more detailed tools. Other changes are also visible, some of those require professional knowledge to interpret.
+
+It is possible that progress' speed varied across regions in Europe, but bigger sample and more details are necessary to speak with certainty. 
+
+It is also apparent that stone type affected tool creation process.
